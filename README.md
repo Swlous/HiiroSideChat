@@ -8,7 +8,7 @@
 
 ---
 
-## 📥 下載與發佈 (Downloads & Releases)
+## Releases
 
 所有正式發布版本均託管於 GitHub Releases，請直接至發布頁取得最新打包檔案：
 
