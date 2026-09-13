@@ -1,5 +1,27 @@
 # HiiroSideChat
 
+[![GitHub Release](https://img.shields.io/github/v/release/Swlous/HiiroSideChat?color=orange&label=Release)](https://github.com/Swlous/HiiroSideChat/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-blue.svg)](https://github.com/Swlous/HiiroSideChat)
+
+在 Chrome 內建 PDF Viewer 中研讀本地或線上 PDF 時的專屬側欄助理。支援 ChatGPT 專案「資料來源」自動同步（免重複上傳）、即時 KaTeX 數學公式渲染、頁面定位與對話歷史自動存檔。
+
+---
+
+## 📥 下載與發佈 (Downloads & Releases)
+
+所有正式發布版本均託管於 GitHub Releases，請直接至發布頁取得最新打包檔案：
+
+- 🚀 **[前往 GitHub Releases 最新發佈頁面](https://github.com/Swlous/HiiroSideChat/releases/latest)**
+
+| 下載項目 | 下載連結 | 安裝說明 |
+| :--- | :--- | :--- |
+| 📦 **最新版 ZIP（推薦）** | **[HiiroSideChat-1.5.6.zip](https://github.com/Swlous/HiiroSideChat/releases/download/v1.5.6/HiiroSideChat-1.5.6.zip)** | 下載後解壓縮，透過 Chrome「載入未封裝項目」安裝（相容性最佳） |
+| 🛡️ **CRX 簽章封裝檔** | **[HiiroSideChat-1.5.6.crx](https://github.com/Swlous/HiiroSideChat/releases/download/v1.5.6/HiiroSideChat-1.5.6.crx)** | 適用於支援直接拖曳 CRX 進行安裝的環境 |
+| 📜 **全部歷史發佈** | **[Releases 歷史列表](https://github.com/Swlous/HiiroSideChat/releases)** | 瀏覽所有過往版本的更動紀錄與檔案下載 |
+
+---
+
 ## v1.5.6
 
 - **初始化優先顯示動畫**：在 PDF 初始化期間不顯示過往的對話歷史，優先呈現橙色狀態文字與加載動畫（「正在同步至專案資料來源…」）；待初始化成功後，再平滑載入並還原歷史記錄。
