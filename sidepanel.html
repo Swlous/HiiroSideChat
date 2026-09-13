@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HiiroSideChat</title>
+    <link rel="stylesheet" href="vendor/katex/katex.min.css">
+    <link rel="stylesheet" href="sidepanel.css">
+    <script defer src="vendor/katex/katex.min.js"></script>
+    <script defer src="vendor/katex/auto-render.min.js"></script>
+    <script type="module" src="sidepanel.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="document-heading">
+        <h1 id="context-title">尚未讀取 PDF</h1>
+        <p id="document-status">—</p>
+      </div>
+      <details class="settings-menu">
+        <summary class="icon-button" title="設定">⋯</summary>
+        <div class="settings-panel">
+          <div class="settings-status">
+            <span id="context-dot" class="dot idle"></span>
+            <span id="context-detail" class="muted">尚未讀取</span>
+          </div>
+
+          <label class="setting-row" for="backend-mode">後端
+            <select id="backend-mode">
+              <option value="auto-chat">自動 · Chat → Work</option>
+              <option value="auto-work">自動 · Work → Chat</option>
+              <option value="chat">僅 Chat</option>
+              <option value="work">僅 Work</option>
+            </select>
+          </label>
+
+          <label class="setting-row" for="font-size">對話字體
+            <select id="font-size">
+              <option value="14">小 · 14px</option>
+              <option value="16" selected>標準 · 16px</option>
+              <option value="18">大 · 18px</option>
+              <option value="20">特大 · 20px</option>
+            </select>
+          </label>
+
+          <label class="setting-row project-row" for="project-select">專案
+            <select id="project-select">
+              <option value="">不使用專案</option>
+            </select>
+          </label>
+          <p id="project-help" class="setting-help">開啟設定時會讀取普通 ChatGPT 中已有的專案。</p>
+
+          <label class="setting-row" for="history-select">歷史記錄
+            <select id="history-select">
+              <option value="">尚無記錄</option>
+            </select>
+          </label>
+          <p id="history-help" class="setting-help">同一份 PDF 再次開啟時會自動恢復；也可在這裡查看其他記錄。</p>
+          <div class="history-actions">
+            <button id="load-history" class="secondary" type="button">查看所選記錄</button>
+            <button id="return-current-history" class="secondary" type="button">返回目前 PDF</button>
+          </div>
+
+          <div class="composer-options">
+            <label><input id="include-pdf" type="checkbox" checked> 完整 PDF</label>
+            <label><input id="include-text" type="checkbox" checked> 頁面文字</label>
+            <label><input id="include-image" type="checkbox" checked> 頁面畫面</label>
+          </div>
+
+          <details class="page-text-details">
+            <summary>目前頁文字</summary>
+            <pre id="page-text">尚無內容</pre>
+          </details>
+
+          <details class="instructions-details">
+            <summary>使用說明</summary>
+            <div class="instructions-content">
+              <section>
+                <h4>1. 讀取 PDF 與初始化</h4>
+                <p>在 Chrome 開啟本機或線上 PDF 後，點擊「重新讀取」。若啟用「完整 PDF」及「專案」，擴充功能將在背景自動將 PDF 同步至專案資料來源；期間側欄僅顯示初始化動畫與提示，不會提前顯示舊歷史記錄。</p>
+              </section>
+              <section>
+                <h4>2. 高速問答</h4>
+                <p>初始化完成後立即開放提問。後續每輪問答僅發送頁碼與問題，無須重複上傳完整文件，大幅提升回應速度。</p>
+              </section>
+              <section>
+                <h4>3. 後端與專案</h4>
+                <p>• <strong>後端</strong>：可切換 ChatGPT 的 Chat 或 Work 模式。<br>
+                   • <strong>專案</strong>：選擇專案後，同專案對話自動共用同一份 PDF 資料來源。</p>
+              </section>
+              <section>
+                <h4>4. 上下文與歷史記錄</h4>
+                <p>• 勾選「完整 PDF / 頁面文字 / 頁面畫面」可彈性調整傳送的上下文。<br>
+                   • 歷史記錄按 PDF 網址與專案自動保存，初始化完成後自動恢復，也可在選單隨時切換查看。</p>
+              </section>
+              <section>
+                <h4>5. 快捷鍵</h4>
+                <p><kbd>Ctrl</kbd> + <kbd>Enter</kbd>：快速送出訊息。</p>
+              </section>
+            </div>
+          </details>
+
+          <div class="setting-row version-row">
+            <span>擴充功能版本</span>
+            <span id="extension-version" class="version-badge">v1.5.6</span>
+          </div>
+
+          <div class="settings-actions">
+            <button id="refresh-context" class="secondary">重新讀取</button>
+            <button id="open-chatgpt" class="secondary">開啟 Chat</button>
+          </div>
+        </div>
+      </details>
+    </header>
+
+    <main id="messages" class="messages" aria-live="polite">
+      <div class="empty-art" aria-hidden="true"></div>
+    </main>
+
+    <section class="composer-shell">
+      <div class="composer-box">
+        <div id="latex-preview" class="latex-preview"></div>
+        <textarea id="prompt" rows="4" aria-label="訊息"></textarea>
+        <button id="send" class="primary composer-send">傳送</button>
+      </div>
+      <div class="composer-meta">
+        <div id="activity" class="activity" role="status"></div>
+        <span class="shortcut-hint">Ctrl + Enter</span>
+      </div>
+    </section>
+  </body>
+</html>
