@@ -7,18 +7,19 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (!changeInfo.url?.startsWith(CHATGPT_HOME)) return;
+  const currentUrl = changeInfo.url || tab.url;
+  if (!currentUrl?.startsWith(CHATGPT_HOME)) return;
   const stored = await chrome.storage.local.get([
     "chatgptTabId_chat", "chatgptTabId_work", "chatgptPdfKey_chat", "chatgptPdfKey_work",
     "chatgptProjectUrl_chat", "chatgptProjectUrl_work", "pdfConversations"
   ]);
   if (stored.chatgptTabId_chat === tabId) {
-    await chrome.storage.local.set({ chatgptConversationUrl_chat: tab.url });
-    await savePdfConversation(stored.chatgptPdfKey_chat, "chat", tab.url, stored.chatgptProjectUrl_chat);
+    await chrome.storage.local.set({ chatgptConversationUrl_chat: currentUrl });
+    await savePdfConversation(stored.chatgptPdfKey_chat, "chat", currentUrl, stored.chatgptProjectUrl_chat);
   }
   if (stored.chatgptTabId_work === tabId) {
-    await chrome.storage.local.set({ chatgptConversationUrl_work: tab.url });
-    await savePdfConversation(stored.chatgptPdfKey_work, "work", tab.url, stored.chatgptProjectUrl_work);
+    await chrome.storage.local.set({ chatgptConversationUrl_work: currentUrl });
+    await savePdfConversation(stored.chatgptPdfKey_work, "work", currentUrl, stored.chatgptProjectUrl_work);
   }
 });
 
@@ -65,11 +66,56 @@ async function handleMessage(message, sender) {
       );
       return {};
     case "chatgpt_stream":
-      if (message.done) await stopChatRenderPump(message.backend || "chat");
+      if (message.done) {
+        await stopChatRenderPump(message.backend || "chat");
+        if (message.conversationUrl?.startsWith(CHATGPT_HOME)) {
+          const backend = message.backend === "work" ? "work" : "chat";
+          await chrome.storage.local.set({ [`chatgptConversationUrl_${backend}`]: message.conversationUrl });
+          const stored = await chrome.storage.local.get([`chatgptPdfKey_${backend}`, `chatgptProjectUrl_${backend}`]);
+          if (stored[`chatgptPdfKey_${backend}`]) {
+            await savePdfConversation(stored[`chatgptPdfKey_${backend}`], backend, message.conversationUrl, stored[`chatgptProjectUrl_${backend}`]);
+          }
+        }
+      }
       return {};
     case "chatgpt_quota":
       await stopChatRenderPump(message.backend || "chat");
       return {};
+    case "start_new_chat": {
+      const backend = message.backend === "work" ? "work" : "chat";
+      const projectUrl = validProjectUrl(message.projectUrl || "");
+      const tabKey = `chatgptTabId_${backend}`;
+      const urlKey = `chatgptConversationUrl_${backend}`;
+      const stored = await chrome.storage.local.get(tabKey);
+      let targetUrl = CHATGPT_HOME;
+      if (projectUrl) {
+        const parsed = new URL(projectUrl);
+        parsed.searchParams.set("tab", "chats");
+        targetUrl = parsed.href;
+      }
+      await chrome.storage.local.set({ [urlKey]: targetUrl });
+      if (stored[tabKey]) {
+        try {
+          await chrome.tabs.update(stored[tabKey], { url: targetUrl, active: false });
+        } catch {}
+      }
+      return { ok: true, targetUrl };
+    }
+    case "switch_chat_conversation": {
+      const backend = message.backend === "work" ? "work" : "chat";
+      const targetUrl = message.url;
+      if (!targetUrl?.startsWith(CHATGPT_HOME)) return { ok: false, error: "無效的對話網址。" };
+      const tabKey = `chatgptTabId_${backend}`;
+      const urlKey = `chatgptConversationUrl_${backend}`;
+      await chrome.storage.local.set({ [urlKey]: targetUrl });
+      const stored = await chrome.storage.local.get(tabKey);
+      if (stored[tabKey]) {
+        try {
+          await chrome.tabs.update(stored[tabKey], { url: targetUrl, active: false });
+        } catch {}
+      }
+      return { ok: true };
+    }
     case "open_chatgpt": {
       const tab = await ensureChatGptTab(message.backend || "chat", message.pdfKey, message.projectUrl);
       await chrome.tabs.update(tab.id, { active: true });
@@ -240,9 +286,14 @@ async function prepareProjectSource(projectUrl, pdfFile, backend = "chat", pdfKe
   const sourcesUrl = new URL(project);
   sourcesUrl.searchParams.set("tab", "sources");
   let tab = null;
+  let returnUrl = null;
   try {
     // Strictly in the background: active: false!
     tab = await ensureChatGptTab(backend || "chat", pdfKey || "", projectUrl);
+    const existingUrl = tab.url || (await chrome.tabs.get(tab.id).catch(() => null))?.url || "";
+    if (existingUrl && /\/c\/[a-zA-Z0-9-]+/.test(existingUrl)) {
+      returnUrl = existingUrl;
+    }
     await chrome.tabs.update(tab.id, { url: sourcesUrl.href, active: false });
     await waitForTabAtUrl(tab.id, (url) => {
       try {
@@ -285,12 +336,13 @@ async function prepareProjectSource(projectUrl, pdfFile, backend = "chat", pdfKe
     };
   } finally {
     if (tab?.id) {
-      // Quietly navigate back to ?tab=chats in the background
+      // Quietly navigate back to ongoing conversation or ?tab=chats in the background
       const chatsUrl = new URL(project);
       chatsUrl.searchParams.set("tab", "chats");
-      await chrome.tabs.update(tab.id, { url: chatsUrl.href, active: false }).catch(() => {});
+      const targetUrl = returnUrl || chatsUrl.href;
+      await chrome.tabs.update(tab.id, { url: targetUrl, active: false }).catch(() => {});
       await chrome.storage.local.set({
-        [`chatgptConversationUrl_${backend}`]: chatsUrl.href
+        [`chatgptConversationUrl_${backend}`]: targetUrl
       });
     }
   }
@@ -521,9 +573,21 @@ async function stopChatRenderPump(backend) {
 }
 
 async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab?.id) throw new Error("找不到目前分頁。");
-  return tab;
+  let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (tab?.id && looksLikePdf(tab)) return tab;
+
+  const [currentWinTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (currentWinTab?.id && looksLikePdf(currentWinTab)) return currentWinTab;
+
+  const activeTabs = await chrome.tabs.query({ active: true });
+  const pdfTab = activeTabs.find(looksLikePdf);
+  if (pdfTab) return pdfTab;
+
+  if (tab?.id) return tab;
+  if (currentWinTab?.id) return currentWinTab;
+  if (activeTabs.length > 0) return activeTabs[0];
+
+  throw new Error("找不到目前分頁。");
 }
 
 function looksLikePdf(tab) {

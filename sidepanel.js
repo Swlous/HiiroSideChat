@@ -18,10 +18,10 @@ const elements = {
   fontSize: document.querySelector("#font-size"),
   projectSelect: document.querySelector("#project-select"),
   projectHelp: document.querySelector("#project-help"),
-  historySelect: document.querySelector("#history-select"),
-  historyHelp: document.querySelector("#history-help"),
-  loadHistory: document.querySelector("#load-history"),
-  returnCurrentHistory: document.querySelector("#return-current-history"),
+  newChatBtn: document.querySelector("#new-chat-btn"),
+  historyMenu: document.querySelector("#history-menu"),
+  historyNewChat: document.querySelector("#history-new-chat"),
+  historyList: document.querySelector("#history-list"),
   settingsMenu: document.querySelector(".settings-menu"),
   refresh: document.querySelector("#refresh-context"),
   openChatGpt: document.querySelector("#open-chatgpt"),
@@ -61,7 +61,7 @@ const answerNodes = new Map();
 const pendingRequests = new Map();
 const streamHeartbeats = new Map();
 const conversationLog = [];
-let activeHistoryKey = "";
+let currentSessionId = "";
 const INITIALIZATION_TOKEN = "HIIRO_PDF_READY";
 let initializationState = { key: "", ready: false, promise: null, resolve: null, reject: null };
 
@@ -77,6 +77,11 @@ elements.prompt.addEventListener("keydown", (event) => {
 });
 elements.refresh.addEventListener("click", () => void prepareContext(true));
 elements.send.addEventListener("click", () => void sendQuestion());
+elements.newChatBtn?.addEventListener("click", () => void startNewChat());
+elements.historyNewChat?.addEventListener("click", () => {
+  closeMenus();
+  void startNewChat();
+});
 elements.backendMode.addEventListener("change", async () => {
   await chrome.storage.local.set({ backendMode: elements.backendMode.value });
   updateOpenButton();
@@ -91,14 +96,18 @@ elements.projectSelect.addEventListener("change", async () => {
   await restoreHistoryForCurrentContext(true);
   await restartInitialization();
 });
-elements.settingsMenu.addEventListener("toggle", () => {
-  if (elements.settingsMenu.open) {
-    void loadProjects();
-    void loadHistoryOptions();
+elements.historyMenu?.addEventListener("toggle", () => {
+  if (elements.historyMenu.open) {
+    if (elements.settingsMenu) elements.settingsMenu.open = false;
+    void renderHistoryList();
   }
 });
-elements.loadHistory.addEventListener("click", () => void showSelectedHistory());
-elements.returnCurrentHistory.addEventListener("click", () => void restoreHistoryForCurrentContext(true));
+elements.settingsMenu?.addEventListener("toggle", () => {
+  if (elements.settingsMenu.open) {
+    if (elements.historyMenu) elements.historyMenu.open = false;
+    void loadProjects();
+  }
+});
 for (const input of [elements.includePdf, elements.includeText, elements.includeImage]) {
   input.addEventListener("change", () => {
     void chrome.storage.local.set({ [input.id]: input.checked });
@@ -116,11 +125,17 @@ elements.openChatGpt.addEventListener("click", () => {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "chatgpt_stream") {
-    if (!message.done) return;
+    if (!message.done) {
+      setActivity("ChatGPT 正在生成回答…");
+      return;
+    }
     const request = pendingRequests.get(message.requestId);
     if (request?.kind === "initialization") {
       void completeInitialization(request, message);
       return;
+    }
+    if (message.conversationUrl && currentSessionId) {
+      void updateSessionChatGptUrl(currentSessionId, message.conversationUrl);
     }
     if (message.error) {
       updateAssistantMessage(message.requestId, message.text, true, true, message.backend);
@@ -139,7 +154,7 @@ void bootSidebar();
 async function bootSidebar() {
   await restoreSettings();
   void loadProjects();
-  await prepareContext(true).catch(() => {});
+  await prepareContext(true).catch((err) => console.error("bootSidebar prepareContext failed:", err));
 }
 
 async function prepareContext(force) {
@@ -188,11 +203,27 @@ async function prepareContext(force) {
     setContextState("ready", context.title || "PDF", pageLabel);
     elements.documentStatus.textContent = pageLabel;
     elements.pageText.textContent = context.text || context.textError || context.warning || "沒有抽取到文字；仍可附加頁面畫面。";
+    const initKey = pdfInitializationKey(context);
+    const storedInit = await chrome.storage.local.get("initializedPdfSessions");
+    if (storedInit.initializedPdfSessions?.[initKey]) {
+      initializationState = { key: initKey, ready: true, promise: null, resolve: null, reject: null, requestId: null };
+    }
     if (elements.includePdf.checked && context.pdfDataUrl) {
-      elements.messages.replaceChildren();
-      void ensurePdfInitialization(context);
+      if (!initializationState.ready || initializationState.key !== initKey) {
+        if (!conversationLog.length) {
+          elements.messages.replaceChildren();
+        }
+        void ensurePdfInitialization(context);
+      } else {
+        if (!conversationLog.length) {
+          await restoreHistoryForCurrentContext();
+        }
+        setActivity(context.warning ? `頁面已擷取；Viewer 提示：${context.warning}` : "頁面內容已準備好。");
+      }
     } else {
-      await restoreHistoryForCurrentContext();
+      if (!conversationLog.length) {
+        await restoreHistoryForCurrentContext();
+      }
       setActivity(context.warning ? `頁面已擷取；Viewer 提示：${context.warning}` : "頁面內容已準備好。");
     }
     return context;
@@ -202,6 +233,35 @@ async function prepareContext(force) {
     setActivity(error?.message || String(error), true);
     throw error;
   }
+}
+
+async function captureCurrentPageContext() {
+  if (!currentContext) {
+    return await prepareContext(false);
+  }
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "capture_pdf_context" });
+    if (response?.ok && response.context) {
+      currentContext.pageNumber = response.context.pageNumber;
+      currentContext.pageCount = response.context.pageCount;
+      currentContext.screenshot = response.context.screenshot;
+      contextPreparedAt = Date.now();
+      const pageLabel = currentContext.pageNumber
+        ? `第 ${currentContext.pageNumber}${currentContext.pageCount ? ` / ${currentContext.pageCount}` : ""} 頁`
+        : "頁碼未取得";
+      elements.documentStatus.textContent = pageLabel;
+      setContextState("ready", currentContext.title || "PDF", pageLabel);
+    }
+    if (elements.includeText.checked && currentContext.pageNumber && currentContext.url) {
+      try {
+        currentContext.text = await extractPageText(currentContext.url, currentContext.pageNumber);
+        elements.pageText.textContent = currentContext.text || "沒有抽取到文字；仍可附加頁面畫面。";
+      } catch {
+        currentContext.text = "";
+      }
+    }
+  } catch {}
+  return currentContext;
 }
 
 async function extractPageText(url, pageNumber) {
@@ -265,6 +325,13 @@ async function ensureProjectSourceInitialization(context, projectUrl) {
   if (initializationState.key === key && initializationState.ready) return true;
   if (initializationState.key === key && initializationState.promise) return initializationState.promise;
 
+  const stored = await chrome.storage.local.get("initializedPdfSessions");
+  if (stored.initializedPdfSessions?.[key]) {
+    initializationState = { key, ready: true, promise: null, resolve: null, reject: null, requestId: null };
+    finishInitializationUi(key, true, "專案資料來源已備妥，可直接提問。");
+    return true;
+  }
+
   initializationState.resolve?.(false);
   let resolveInitialization;
   const promise = new Promise((resolve) => { resolveInitialization = resolve; });
@@ -294,6 +361,9 @@ async function ensureProjectSourceInitialization(context, projectUrl) {
     if (!response?.ok || !response.sourceReady) {
       throw new Error(response?.error || "ChatGPT 沒有確認專案資料來源。");
     }
+    const sessions = (await chrome.storage.local.get("initializedPdfSessions")).initializedPdfSessions || {};
+    sessions[key] = true;
+    await chrome.storage.local.set({ initializedPdfSessions: sessions });
     finishInitializationUi(
       key,
       true,
@@ -389,6 +459,7 @@ async function completeInitialization(request, message) {
 }
 
 function showInitialization(filename, status = "正在初始化文件附件…") {
+  if (conversationLog.length > 0) return;
   elements.messages.replaceChildren();
   let node = document.querySelector(".initialization-state");
   if (!node) {
@@ -423,7 +494,9 @@ async function finishInitializationUi(key, success, text) {
   elements.activity.classList.remove("initializing");
   setActivity(text, !success);
   resolve?.(success);
-  await restoreHistoryForCurrentContext(true);
+  if (!conversationLog.length) {
+    await restoreHistoryForCurrentContext(true);
+  }
 }
 
 async function restartInitialization() {
@@ -433,12 +506,12 @@ async function restartInitialization() {
   elements.messages.classList.remove("initializing");
   elements.activity.classList.remove("initializing");
   if (currentContext && elements.includePdf.checked) {
-    elements.messages.replaceChildren();
+    if (!conversationLog.length) elements.messages.replaceChildren();
     await ensurePdfInitialization(currentContext);
   } else {
     elements.prompt.disabled = false;
     elements.send.disabled = false;
-    await restoreHistoryForCurrentContext(true);
+    if (!conversationLog.length) await restoreHistoryForCurrentContext(true);
     setActivity("頁面內容已準備好。");
   }
 }
@@ -450,40 +523,58 @@ async function sendQuestion() {
     return;
   }
 
-  closeSettingsMenu();
+  closeMenus();
   elements.send.disabled = true;
-  setActivity("傳送前重新確認目前頁面…");
+  setActivity("傳送前確認頁面…");
   let requestId = null;
 
   try {
-    const context = await prepareContext(true);
-    const pdfReady = elements.includePdf.checked
-      ? await ensurePdfInitialization(context)
-      : false;
-    if (elements.includePdf.checked && !pdfReady) {
-      throw new Error("完整 PDF 尚未完成初始化，請按「重新讀取」後再試。");
+    const hasExistingHistory = conversationLog.length > 0;
+    if (elements.includePdf.checked && !hasExistingHistory) {
+      if (initializationState.promise) {
+        setActivity("等待 PDF 初始化完成…");
+        await initializationState.promise;
+      }
+      if (!initializationState.ready && currentContext?.pdfDataUrl) {
+        const ready = await ensurePdfInitialization(currentContext);
+        if (!ready) throw new Error("完整 PDF 尚未完成初始化，請按「重新讀取」後再試。");
+      }
     }
+
+    const context = await captureCurrentPageContext();
     requestId = crypto.randomUUID();
     appendMessage("user", question);
     conversationLog.push({ role: "user", text: question });
-    void persistCurrentHistory();
+
+    if (!currentSessionId) {
+      currentSessionId = generateSessionId();
+    }
+    void persistCurrentSession(question);
     createAssistantPlaceholder(requestId);
 
     const pageText = elements.includeText.checked ? (context.text || "") : "";
-    context.includeFullPdf = Boolean(elements.includePdf.checked && pdfReady);
+    context.includeFullPdf = Boolean(elements.includePdf.checked && initializationState.ready);
     const prompt = buildPrompt(question, context, pageText);
     const screenshot = elements.includeImage.checked ? context.screenshot : null;
     const mode = elements.backendMode.value;
     const backend = primaryBackend(mode);
+
+    // Only attach pdfFile on the very first turn of a direct (non-project) conversation
+    const isFirstUserTurn = conversationLog.filter((m) => m.role === "user").length <= 1;
+    const needsDirectPdf = Boolean(!normalizeProjectUrl(elements.projectSelect.value) && elements.includePdf.checked && isFirstUserTurn && context.pdfDataUrl);
+    const pdfFile = needsDirectPdf ? {
+      dataUrl: context.pdfDataUrl,
+      name: context.pdfName || safePdfFilename(context.title),
+      key: `${context.url}::${backend}::${normalizeProjectUrl(elements.projectSelect.value)}`
+    } : null;
+
     const request = {
       requestId,
       question,
       prompt,
       screenshot,
       imageName: `${safeFilename(context.title)}-page-${context.pageNumber || "current"}.jpg`,
-      // Initialization already attached the complete document to this
-      // conversation. Normal questions only send the current-page locator.
-      pdfFile: null,
+      pdfFile,
       pdfKey: context.url,
       reasoningEffort: "auto",
       projectUrl: elements.projectSelect.value,
@@ -730,7 +821,7 @@ function finishRequest(requestId, text, isError) {
       backend: request.currentBackend || "chat",
       error: Boolean(isError)
     });
-    void persistCurrentHistory();
+    void persistCurrentSession();
   }
   pendingRequests.delete(requestId);
   stopStreamHeartbeat(requestId);
@@ -777,81 +868,175 @@ function updateOpenButton() {
   elements.openChatGpt.textContent = `開啟 ${backendLabel(primaryBackend(elements.backendMode.value))}`;
 }
 
-function currentHistoryKey(context = currentContext) {
-  if (!context?.url) return "";
-  return [context.url, normalizeProjectUrl(elements.projectSelect.value)].join("\n");
+function generateSessionId() {
+  return "sess_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
 }
 
-async function persistCurrentHistory() {
-  const key = currentHistoryKey();
-  if (!key || activeHistoryKey !== key || !conversationLog.length) return;
-  const stored = await chrome.storage.local.get("sidebarHistories");
-  const histories = stored.sidebarHistories || {};
-  histories[key] = {
-    key,
-    title: currentContext?.title || currentContext?.pdfName || "PDF",
-    url: currentContext?.url || "",
-    projectUrl: normalizeProjectUrl(elements.projectSelect.value),
-    projectName: elements.projectSelect.selectedOptions?.[0]?.textContent || "不使用專案",
-    updatedAt: Date.now(),
-    messages: conversationLog.slice(-200).map((entry) => ({
-      role: entry.role,
-      text: entry.text,
-      backend: entry.backend || "",
-      error: Boolean(entry.error)
-    }))
-  };
+async function migrateOldHistoriesIfNeeded(stored) {
+  if (stored.sidebarHistories && !stored.sidebarSessions) {
+    const sessions = {};
+    for (const [, oldEntry] of Object.entries(stored.sidebarHistories)) {
+      const id = "sess_migrated_" + (oldEntry.updatedAt || Date.now()) + "_" + Math.random().toString(36).slice(2, 6);
+      sessions[id] = {
+        id,
+        pdfUrl: oldEntry.url || "",
+        pdfTitle: oldEntry.title || "PDF",
+        projectUrl: oldEntry.projectUrl || "",
+        projectName: oldEntry.projectName || "不使用專案",
+        backend: "chat",
+        chatgptUrl: "",
+        title: oldEntry.messages?.find((m) => m.role === "user")?.text?.slice(0, 40) || oldEntry.title || "歷史對話",
+        createdAt: oldEntry.updatedAt || Date.now(),
+        updatedAt: oldEntry.updatedAt || Date.now(),
+        messages: oldEntry.messages || []
+      };
+    }
+    await chrome.storage.local.set({ sidebarSessions: sessions });
+    stored.sidebarSessions = sessions;
+  }
+}
 
-  const ordered = Object.values(histories).sort((a, b) => b.updatedAt - a.updatedAt);
-  let retainedCharacters = 0;
-  for (const [index, entry] of ordered.entries()) {
-    const entryCharacters = (entry.messages || []).reduce((sum, message) => sum + (message.text?.length || 0), 0);
-    if (index >= 30 || (index > 0 && retainedCharacters + entryCharacters > 7_000_000)) {
-      delete histories[entry.key];
-    } else {
-      retainedCharacters += entryCharacters;
+async function persistCurrentSession(questionPrompt = "") {
+  if (!conversationLog.length) return;
+  if (!currentSessionId) currentSessionId = generateSessionId();
+
+  const stored = await chrome.storage.local.get(["sidebarSessions", "currentSessionForPdf"]);
+  const sessions = stored.sidebarSessions || {};
+  let session = sessions[currentSessionId];
+  if (!session) {
+    const titleText = (questionPrompt || conversationLog.find((m) => m.role === "user")?.text || "新對話").slice(0, 40);
+    session = {
+      id: currentSessionId,
+      pdfUrl: currentContext?.url || "",
+      pdfTitle: currentContext?.title || currentContext?.pdfName || "PDF",
+      projectUrl: normalizeProjectUrl(elements.projectSelect.value),
+      projectName: elements.projectSelect.selectedOptions?.[0]?.textContent || "不使用專案",
+      backend: primaryBackend(elements.backendMode.value),
+      chatgptUrl: "",
+      title: titleText,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: []
+    };
+  }
+
+  session.updatedAt = Date.now();
+  if (!session.title || session.title === "新對話") {
+    const firstUserMsg = conversationLog.find((m) => m.role === "user");
+    if (firstUserMsg) session.title = firstUserMsg.text.slice(0, 40);
+  }
+  session.projectUrl = normalizeProjectUrl(elements.projectSelect.value);
+  session.projectName = elements.projectSelect.selectedOptions?.[0]?.textContent || "不使用專案";
+  session.backend = primaryBackend(elements.backendMode.value);
+  session.messages = conversationLog.slice(-200).map((entry) => ({
+    role: entry.role,
+    text: entry.text,
+    backend: entry.backend || "",
+    error: Boolean(entry.error)
+  }));
+  sessions[currentSessionId] = session;
+
+  const ordered = Object.values(sessions).sort((a, b) => b.updatedAt - a.updatedAt);
+  if (ordered.length > 50) {
+    for (const old of ordered.slice(50)) {
+      delete sessions[old.id];
     }
   }
-  await chrome.storage.local.set({ sidebarHistories: histories });
-  void loadHistoryOptions(key);
+
+  const currentMap = stored.currentSessionForPdf || {};
+  if (currentContext?.url) {
+    currentMap[currentContext.url] = currentSessionId;
+  }
+  await chrome.storage.local.set({ sidebarSessions: sessions, currentSessionForPdf: currentMap });
+  if (elements.historyMenu?.open) {
+    void renderHistoryList();
+  }
+}
+
+async function updateSessionChatGptUrl(sessionId, chatgptUrl) {
+  if (!sessionId || !chatgptUrl) return;
+  const stored = await chrome.storage.local.get("sidebarSessions");
+  const sessions = stored.sidebarSessions || {};
+  if (sessions[sessionId]) {
+    sessions[sessionId].chatgptUrl = chatgptUrl;
+    await chrome.storage.local.set({ sidebarSessions: sessions });
+  }
+}
+
+async function startNewChat() {
+  if (pendingRequests.size > 0) {
+    setActivity("請等目前回答完成後再開啟新對話。");
+    return;
+  }
+  closeMenus();
+  if (conversationLog.length > 0) {
+    await persistCurrentSession();
+  }
+  elements.messages.replaceChildren();
+  addEmptyArtwork();
+  conversationLog.splice(0, conversationLog.length);
+  answerNodes.clear();
+  currentSessionId = generateSessionId();
+
+  const backend = primaryBackend(elements.backendMode.value);
+  const projectUrl = normalizeProjectUrl(elements.projectSelect.value);
+  void chrome.runtime.sendMessage({
+    type: "start_new_chat",
+    backend,
+    projectUrl,
+    pdfKey: currentContext?.url || ""
+  }).catch(() => {});
+
+  const currentMap = (await chrome.storage.local.get("currentSessionForPdf")).currentSessionForPdf || {};
+  if (currentContext?.url) {
+    currentMap[currentContext.url] = currentSessionId;
+    await chrome.storage.local.set({ currentSessionForPdf: currentMap });
+  }
+
+  setActivity("已開啟新對話。");
+  elements.prompt.value = "";
+  elements.prompt.focus();
+  renderPreview();
 }
 
 async function restoreHistoryForCurrentContext(force = false) {
-  const key = currentHistoryKey();
-  if (!key || (!force && activeHistoryKey === key)) return;
-  const stored = await chrome.storage.local.get("sidebarHistories");
-  const entry = stored.sidebarHistories?.[key] || {
-    key,
-    title: currentContext?.title || "PDF",
-    messages: []
-  };
-  renderHistoryEntry(entry, true);
-  await loadHistoryOptions(key);
+  if (!currentContext?.url) return;
+  const stored = await chrome.storage.local.get(["sidebarSessions", "currentSessionForPdf", "sidebarHistories"]);
+  await migrateOldHistoriesIfNeeded(stored);
+
+  const sessions = stored.sidebarSessions || {};
+  const currentMap = stored.currentSessionForPdf || {};
+  const targetSessionId = currentMap[currentContext.url];
+
+  let sessionToLoad = null;
+  if (targetSessionId && sessions[targetSessionId]) {
+    sessionToLoad = sessions[targetSessionId];
+  } else {
+    const forThisPdf = Object.values(sessions)
+      .filter((s) => s.pdfUrl === currentContext.url)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    if (forThisPdf.length > 0) {
+      sessionToLoad = forThisPdf[0];
+    }
+  }
+
+  if (sessionToLoad) {
+    currentSessionId = sessionToLoad.id;
+    renderSession(sessionToLoad);
+  } else {
+    currentSessionId = generateSessionId();
+    elements.messages.replaceChildren();
+    addEmptyArtwork();
+    conversationLog.splice(0, conversationLog.length);
+  }
 }
 
-async function showSelectedHistory() {
-  const key = elements.historySelect.value;
-  if (!key) return;
-  if (pendingRequests.size) {
-    elements.historyHelp.textContent = "請等目前回答完成後再切換記錄。";
-    return;
-  }
-  const stored = await chrome.storage.local.get("sidebarHistories");
-  const entry = stored.sidebarHistories?.[key];
-  if (!entry) {
-    elements.historyHelp.textContent = "找不到這筆歷史記錄。";
-    return;
-  }
-  renderHistoryEntry(entry, key === currentHistoryKey());
-  closeSettingsMenu();
-}
-
-function renderHistoryEntry(entry, isCurrent) {
+function renderSession(session) {
   document.querySelector(".initialization-state")?.remove();
   elements.messages.classList.remove("initializing");
   elements.messages.replaceChildren();
   conversationLog.splice(0, conversationLog.length);
-  for (const message of entry.messages || []) {
+  for (const message of session.messages || []) {
     const role = message.role === "user" ? "user" : `assistant${message.error ? " error" : ""}`;
     const node = appendMessage(role, message.text || "");
     if (message.role === "assistant" && message.backend) {
@@ -859,34 +1044,129 @@ function renderHistoryEntry(entry, isCurrent) {
     }
     conversationLog.push({ ...message });
   }
-  if (!(entry.messages || []).length) addEmptyArtwork();
-  activeHistoryKey = entry.key;
-  elements.historyHelp.textContent = isCurrent
-    ? `已載入目前 PDF 的 ${(entry.messages || []).length} 則訊息。`
-    : `正在查看 ${entry.title || "PDF"} 的歷史；提問前會自動返回目前 PDF。`;
-  setActivity(isCurrent ? "歷史記錄已恢復。" : `正在查看：${entry.title || "PDF"}`);
+  if (!(session.messages || []).length) addEmptyArtwork();
+  setActivity(`已載入對話（${(session.messages || []).length} 則訊息）`);
 }
 
-async function loadHistoryOptions(preferredKey = "") {
-  const stored = await chrome.storage.local.get("sidebarHistories");
-  const histories = Object.values(stored.sidebarHistories || {})
-    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  const selected = preferredKey || elements.historySelect.value || currentHistoryKey();
-  elements.historySelect.replaceChildren();
-  if (!histories.length) {
-    elements.historySelect.add(new Option("尚無記錄", ""));
-    elements.loadHistory.disabled = true;
+async function switchSession(sessionId) {
+  if (sessionId === currentSessionId) {
+    closeMenus();
     return;
   }
-  for (const entry of histories) {
-    const time = entry.updatedAt ? new Date(entry.updatedAt).toLocaleString("zh-Hant", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
-    const project = entry.projectName && entry.projectName !== "不使用專案" ? ` · ${entry.projectName}` : "";
-    elements.historySelect.add(new Option(`${entry.title || "PDF"}${project}${time ? ` · ${time}` : ""}`, entry.key));
+  if (pendingRequests.size > 0) {
+    setActivity("請等目前回答完成後再切換對話。");
+    return;
   }
-  if ([...elements.historySelect.options].some((option) => option.value === selected)) {
-    elements.historySelect.value = selected;
+  if (conversationLog.length > 0) {
+    await persistCurrentSession();
   }
-  elements.loadHistory.disabled = false;
+  const stored = await chrome.storage.local.get(["sidebarSessions", "currentSessionForPdf"]);
+  const session = stored.sidebarSessions?.[sessionId];
+  if (!session) {
+    setActivity("找不到該對話記錄。");
+    return;
+  }
+  currentSessionId = sessionId;
+  renderSession(session);
+  if (session.chatgptUrl) {
+    void chrome.runtime.sendMessage({
+      type: "switch_chat_conversation",
+      url: session.chatgptUrl,
+      backend: session.backend || primaryBackend(elements.backendMode.value)
+    });
+  }
+  if (currentContext?.url) {
+    const currentMap = stored.currentSessionForPdf || {};
+    currentMap[currentContext.url] = sessionId;
+    await chrome.storage.local.set({ currentSessionForPdf: currentMap });
+  }
+  closeMenus();
+}
+
+async function deleteSession(sessionId, event) {
+  event?.stopPropagation();
+  const stored = await chrome.storage.local.get(["sidebarSessions", "currentSessionForPdf"]);
+  const sessions = stored.sidebarSessions || {};
+  if (!sessions[sessionId]) return;
+  delete sessions[sessionId];
+  await chrome.storage.local.set({ sidebarSessions: sessions });
+  if (sessionId === currentSessionId) {
+    await startNewChat();
+  } else {
+    await renderHistoryList();
+  }
+}
+
+async function renderHistoryList() {
+  const container = elements.historyList;
+  if (!container) return;
+  container.replaceChildren();
+
+  const stored = await chrome.storage.local.get(["sidebarSessions", "sidebarHistories"]);
+  await migrateOldHistoriesIfNeeded(stored);
+  const sessions = Object.values(stored.sidebarSessions || {})
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+  if (!sessions.length) {
+    const empty = document.createElement("p");
+    empty.className = "history-empty";
+    empty.textContent = "尚無對話記錄";
+    container.appendChild(empty);
+    return;
+  }
+
+  for (const session of sessions) {
+    const item = document.createElement("div");
+    item.className = `history-item${session.id === currentSessionId ? " active" : ""}`;
+    item.title = session.title || "未命名對話";
+
+    const main = document.createElement("div");
+    main.className = "history-item-main";
+
+    const title = document.createElement("div");
+    title.className = "history-item-title";
+    title.textContent = session.title || "未命名對話";
+
+    const meta = document.createElement("div");
+    meta.className = "history-item-meta";
+    const timeStr = session.updatedAt
+      ? new Date(session.updatedAt).toLocaleString("zh-Hant", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+      : "";
+    const timeSpan = document.createElement("span");
+    timeSpan.textContent = timeStr;
+    const countSpan = document.createElement("span");
+    countSpan.textContent = `${(session.messages || []).length} 則`;
+    meta.append(timeSpan, countSpan);
+
+    if (session.projectName && session.projectName !== "不使用專案") {
+      const tag = document.createElement("span");
+      tag.className = "history-item-tag";
+      tag.textContent = session.projectName;
+      meta.appendChild(tag);
+    }
+
+    main.append(title, meta);
+    main.addEventListener("click", () => void switchSession(session.id));
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "history-item-delete";
+    deleteBtn.type = "button";
+    deleteBtn.title = "刪除此對話";
+    deleteBtn.innerHTML = "&times;";
+    deleteBtn.addEventListener("click", (e) => void deleteSession(session.id, e));
+
+    item.append(main, deleteBtn);
+    container.appendChild(item);
+  }
+}
+
+function closeMenus() {
+  if (elements.settingsMenu) elements.settingsMenu.open = false;
+  if (elements.historyMenu) elements.historyMenu.open = false;
+}
+
+function closeSettingsMenu() {
+  closeMenus();
 }
 
 function addEmptyArtwork() {
@@ -962,10 +1242,6 @@ function setActivity(text, isError = false) {
   elements.activity.title = text;
   elements.activity.classList.toggle("error", isError);
   if (isError) closeSettingsMenu();
-}
-
-function closeSettingsMenu() {
-  if (elements.settingsMenu) elements.settingsMenu.open = false;
 }
 
 function safeFilename(value = "pdf") {

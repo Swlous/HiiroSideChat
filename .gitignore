@@ -1,4 +1,4 @@
-﻿# Security & Private Keys (CRX signing keys)
+# Security & Private Keys (CRX signing keys)
 *.pem
 *.key
 
@@ -21,3 +21,6 @@ yarn-debug.log*
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Agent instructions
+GEMINI.md

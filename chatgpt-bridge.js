@@ -670,8 +670,15 @@
         const needsCopyFallback = !domText || renderedMathCount > 0 && domMathCount === 0;
         const sourceText = explicitComplete && needsCopyFallback ? await captureCopiedSource(latest) : "";
         const finalText = chooseRicherMathSource(sourceText, domText || lastText);
-        await ensureConversationTitle(payload.chatTitle);
-        emit({ type: "chatgpt_stream", requestId: payload.requestId, backend: payload.backend, text: finalText, done: true });
+        await ensureConversationTitle(payload.chatTitle).catch(() => {});
+        emit({
+          type: "chatgpt_stream",
+          requestId: payload.requestId,
+          backend: payload.backend,
+          text: finalText,
+          done: true,
+          conversationUrl: location.href
+        });
         activeStreams.delete(payload.requestId);
         streamWakeups.delete(payload.requestId);
         return;

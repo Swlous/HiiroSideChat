@@ -16,49 +16,58 @@
         <h1 id="context-title">尚未讀取 PDF</h1>
         <p id="document-status">—</p>
       </div>
-      <details class="settings-menu">
-        <summary class="icon-button" title="設定">⋯</summary>
-        <div class="settings-panel">
-          <div class="settings-status">
-            <span id="context-dot" class="dot idle"></span>
-            <span id="context-detail" class="muted">尚未讀取</span>
+      <div class="topbar-actions">
+        <button id="new-chat-btn" class="icon-button" type="button" title="新對話" aria-label="新對話">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
+        <details id="history-menu" class="history-menu">
+          <summary class="icon-button" title="歷史記錄" aria-label="歷史記錄">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><polyline points="12 7 12 12 15 15"></polyline></svg>
+          </summary>
+          <div class="history-panel">
+            <div class="history-panel-header">
+              <span class="history-panel-title">歷史對話</span>
+              <button id="history-new-chat" class="history-action-btn" type="button">＋ 新對話</button>
+            </div>
+            <div id="history-list" class="history-list">
+              <p class="history-empty">尚無對話記錄</p>
+            </div>
           </div>
+        </details>
+        <details class="settings-menu">
+          <summary class="icon-button" title="設定" aria-label="設定">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"></circle><circle cx="12" cy="12" r="2"></circle><circle cx="19" cy="12" r="2"></circle></svg>
+          </summary>
+          <div class="settings-panel">
+            <div class="settings-status">
+              <span id="context-dot" class="dot idle"></span>
+              <span id="context-detail" class="muted">尚未讀取</span>
+            </div>
 
-          <label class="setting-row" for="backend-mode">後端
-            <select id="backend-mode">
-              <option value="auto-chat">自動 · Chat → Work</option>
-              <option value="auto-work">自動 · Work → Chat</option>
-              <option value="chat">僅 Chat</option>
-              <option value="work">僅 Work</option>
-            </select>
-          </label>
+            <label class="setting-row" for="backend-mode">後端
+              <select id="backend-mode">
+                <option value="auto-chat">自動 · Chat → Work</option>
+                <option value="auto-work">自動 · Work → Chat</option>
+                <option value="chat">僅 Chat</option>
+                <option value="work">僅 Work</option>
+              </select>
+            </label>
 
-          <label class="setting-row" for="font-size">對話字體
-            <select id="font-size">
-              <option value="14">小 · 14px</option>
-              <option value="16" selected>標準 · 16px</option>
-              <option value="18">大 · 18px</option>
-              <option value="20">特大 · 20px</option>
-            </select>
-          </label>
+            <label class="setting-row" for="font-size">對話字體
+              <select id="font-size">
+                <option value="14">小 · 14px</option>
+                <option value="16" selected>標準 · 16px</option>
+                <option value="18">大 · 18px</option>
+                <option value="20">特大 · 20px</option>
+              </select>
+            </label>
 
-          <label class="setting-row project-row" for="project-select">專案
-            <select id="project-select">
-              <option value="">不使用專案</option>
-            </select>
-          </label>
-          <p id="project-help" class="setting-help">開啟設定時會讀取普通 ChatGPT 中已有的專案。</p>
-
-          <label class="setting-row" for="history-select">歷史記錄
-            <select id="history-select">
-              <option value="">尚無記錄</option>
-            </select>
-          </label>
-          <p id="history-help" class="setting-help">同一份 PDF 再次開啟時會自動恢復；也可在這裡查看其他記錄。</p>
-          <div class="history-actions">
-            <button id="load-history" class="secondary" type="button">查看所選記錄</button>
-            <button id="return-current-history" class="secondary" type="button">返回目前 PDF</button>
-          </div>
+            <label class="setting-row project-row" for="project-select">專案
+              <select id="project-select">
+                <option value="">不使用專案</option>
+              </select>
+            </label>
+            <p id="project-help" class="setting-help">開啟設定時會讀取普通 ChatGPT 中已有的專案。</p>
 
           <div class="composer-options">
             <label><input id="include-pdf" type="checkbox" checked> 完整 PDF</label>
@@ -90,7 +99,7 @@
               <section>
                 <h4>4. 上下文與歷史記錄</h4>
                 <p>• 勾選「完整 PDF / 頁面文字 / 頁面畫面」可彈性調整傳送的上下文。<br>
-                   • 歷史記錄按 PDF 網址與專案自動保存，初始化完成後自動恢復，也可在選單隨時切換查看。</p>
+                   • 點擊頂部「＋」可隨時開啟全新對話；點擊「🕒」可查看並切換歷次對話記錄。</p>
               </section>
               <section>
                 <h4>5. 快捷鍵</h4>
@@ -101,7 +110,7 @@
 
           <div class="setting-row version-row">
             <span>擴充功能版本</span>
-            <span id="extension-version" class="version-badge">v1.5.6</span>
+            <span id="extension-version" class="version-badge">v1.5.7</span>
           </div>
 
           <div class="settings-actions">
